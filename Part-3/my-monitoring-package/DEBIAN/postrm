@@ -1,0 +1,7 @@
+#!/bin/bash
+set -e
+
+systemctl stop prometheus
+systemctl stop prometheus-alertmanager
+apt purge -y prometheus prometheus-alertmanager openvpn-exporter
+rm -rf /etc/prometheus /etc/alertmanager

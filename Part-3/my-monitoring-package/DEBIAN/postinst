@@ -1,0 +1,200 @@
+#!/bin/bash
+set -e
+
+if [ "$EUID" -ne 0 ]; then
+  echo "Error! run as root."
+  exit 1
+fi
+check_installed() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Install Go, if not present
+if ! check_installed go; then
+    echo "Installing Go..."
+    wget https://go.dev/dl/go1.22.2.linux-amd64.tar.gz
+    tar -C /usr/local -xzf go1.22.2.linux-amd64.tar.gz
+    rm go1.22.2.linux-amd64.tar.gz
+    export PATH=$PATH:/usr/local/go/bin
+else
+    echo "Go is already installed."
+fi
+
+# Install openvpn-exporter, if not present
+if ! check_installed openvpn_exporter; then
+    echo "Installing openvpn-exporter..."
+    go install github.com/kumina/openvpn_exporter@latest
+    sudo mv ~/go/bin/openvpn_exporter /usr/local/bin/
+else
+    echo "openvpn-exporter is already installed."
+fi
+
+# Install alertmanager, if not present
+ALERTMANAGER_BIN="/usr/local/bin/alertmanager"
+if [ ! -f "$ALERTMANAGER_BIN" ]; then
+    echo "Installing alertmanager..."
+    wget https://github.com/prometheus/alertmanager/releases/download/v0.27.0/alertmanager-0.27.0.linux-amd64.tar.gz
+    tar -xzf alertmanager-0.27.0.linux-amd64.tar.gz
+    sudo mv alertmanager-0.27.0.linux-amd64/alertmanager /usr/local/bin/
+    rm -rf alertmanager-0.27.0.linux-amd64.tar.gz alertmanager-0.27.0.linux-amd64
+else
+    echo "alertmanager is already installed."
+fi
+
+#apt update
+#apt install -y prometheus prometheus-alertmanager openvpn-exporter
+
+cat <<EOF > /etc/prometheus/prometheus.yml
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'openvpn'
+    static_configs:
+      - targets: ['localhost:9176']
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['localhost:9093']
+
+rule_files:
+  - /etc/prometheus/rules/openvpn_alerts.yml
+EOF
+
+# Configure or update rules file
+mkdir -p /etc/prometheus/rules
+if [ -f /etc/prometheus/rules/openvpn_alerts.yml ]; then
+    echo "Updating existing openvpn_alerts.yml with new rules..."
+    # Check if rules already exist, add only if missing
+    if ! grep -q "LowTrafficAlert" /etc/prometheus/rules/openvpn_alerts.yml; then
+        cat <<EOF >> /etc/prometheus/rules/openvpn_alerts.yml
+  - alert: LowTrafficAlert
+    expr: rate(openvpn_server_bytes_in[5m]) < 1000
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Low traffic detected on OpenVPN"
+      description: "Incoming traffic rate is below 1000 bytes/sec for 10 minutes."
+EOF
+    fi
+    if ! grep -q "HighTrafficAlert" /etc/prometheus/rules/openvpn_alerts.yml; then
+        cat <<EOF >> /etc/prometheus/rules/openvpn_alerts.yml
+  - alert: HighTrafficAlert
+    expr: rate(openvpn_server_bytes_in[5m]) > 1000000
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High traffic detected on OpenVPN"
+      description: "Incoming traffic rate exceeds 1MB/sec for 10 minutes."
+EOF
+    fi
+else
+    echo "Creating new openvpn_alerts.yml..."
+    cat <<EOF > /etc/prometheus/rules/openvpn_alerts.yml
+groups:
+- name: openvpn_alerts
+  rules:
+  - alert: NoConnectedClients
+    expr: openvpn_server_connected_clients{job="openvpn"} < 1
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "No clients connected to OpenVPN"
+      description: "No clients have been connected to the OpenVPN server for 5 minutes."
+  - alert: LowTrafficAlert
+    expr: rate(openvpn_server_bytes_in[5m]) < 1000
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Low traffic detected on OpenVPN"
+      description: "Incoming traffic rate is below 1000 bytes/sec for 10 minutes."
+  - alert: HighTrafficAlert
+    expr: rate(openvpn_server_bytes_in[5m]) > 1000000
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High traffic detected on OpenVPN"
+      description: "Incoming traffic rate exceeds 1MB/sec for 10 minutes."
+  - alert: OpenVPNDown
+    expr: up{job="openvpn"} == 0
+    for: 2m
+    labels:
+      severity: critical
+    annotations:
+      summary: "OpenVPN exporter is down"
+      description: "OpenVPN exporter on {{ $labels.instance }} is down for more than 2 minutes."
+  - alert: TooManyClients
+    expr: openvpn_server_connected_clients{job="openvpn"} > 100
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Too many clients connected to OpenVPN"
+      description: "More than 50 clients are connected to OpenVPN on {{ $labels.instance }} for 5 minutes."
+- name: infrastructure_alerts
+  rules:
+  - alert: HighCPUUsage
+    expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High CPU usage on {{ $labels.instance }}"
+      description: "CPU usage is above 80% for more than 5 minutes on {{ $labels.instance }}."
+  - alert: LowDiskSpace
+    expr: node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} * 100 < 20
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Low disk space on {{ $labels.instance }}"
+      description: "Disk space is below 20% on {{ $labels.instance }} for more than 5 minutes."
+  - alert: HighMemoryUsage
+    expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100 > 80
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High memory usage on {{ $labels.instance }}"
+      description: "Memory usage is above 80% on {{ $labels.instance }} for more than 5 minutes."
+
+EOF
+fi
+
+mkdir -p /etc/alertmanager
+cat <<EOF > /etc/alertmanager/alertmanager.yml
+global:
+  smtp_smarthost: 'smtp.yandex.com:587'
+  smtp_from: 'super.pokemon25@yandex.ru'
+  smtp_auth_username: 'super.pokemon25@yandex.ru'
+  smtp_auth_password: 'pcoxxsqirvidhsxm'
+  smtp_require_tls: true
+
+route:
+  group_by: ['alertname']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 1h
+  receiver: 'email-notifications'
+
+receivers:
+  - name: 'email-notifications'
+    email_configs:
+      - to: 'super.pokemon25@yandex.ru'
+        send_resolved: true
+EOF
+# Ensure data directory exists with correct permissions
+mkdir -p /var/lib/alertmanager
+chown -R prometheus:prometheus /var/lib/alertmanager
+systemctl enable prometheus
+systemctl start prometheus
+systemctl enable prometheus-alertmanager
+systemctl start prometheus-alertmanager
+
+echo "Настройка мониторинга завершена!"

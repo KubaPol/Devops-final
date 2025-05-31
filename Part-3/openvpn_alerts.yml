@@ -1,0 +1,69 @@
+groups:
+- name: openvpn_alerts
+  rules:
+  - alert: NoConnectedClients
+    expr: openvpn_server_connected_clients{job="openvpn"} < 1
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "No clients connected to OpenVPN"
+      description: "No clients have been connected to the OpenVPN server for 5 minutes."
+  - alert: LowTrafficAlert
+    expr: rate(openvpn_server_bytes_in[5m]) < 1000
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Low traffic detected on OpenVPN"
+      description: "Incoming traffic rate is below 1000 bytes/sec for 10 minutes."
+  - alert: HighTrafficAlert
+    expr: rate(openvpn_server_bytes_in[5m]) > 1000000
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High traffic detected on OpenVPN"
+      description: "Incoming traffic rate exceeds 1MB/sec for 10 minutes."
+  - alert: OpenVPNDown
+    expr: up{job="openvpn"} == 0
+    for: 2m
+    labels:
+      severity: critical
+    annotations:
+      summary: "OpenVPN exporter is down"
+      description: "OpenVPN exporter on {{ $labels.instance }} is down for more than 2 minutes."
+  - alert: TooManyClients
+    expr: openvpn_server_connected_clients{job="openvpn"} > 100
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Too many clients connected to OpenVPN"
+      description: "More than 50 clients are connected to OpenVPN on {{ $labels.instance }} for 5 minutes."
+- name: infrastructure_alerts
+  rules:
+  - alert: HighCPUUsage
+    expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High CPU usage on {{ $labels.instance }}"
+      description: "CPU usage is above 80% for more than 5 minutes on {{ $labels.instance }}."
+  - alert: LowDiskSpace
+    expr: node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} * 100 < 20
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Low disk space on {{ $labels.instance }}"
+      description: "Disk space is below 20% on {{ $labels.instance }} for more than 5 minutes."
+  - alert: HighMemoryUsage
+    expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100 > 80
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High memory usage on {{ $labels.instance }}"
+      description: "Memory usage is above 80% on {{ $labels.instance }} for more than 5 minutes."

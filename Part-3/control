@@ -1,0 +1,12 @@
+Package: my-monitoring-package
+Version: 1.0-1
+Architecture: all
+Maintainer: kubapol <kubapol@unknown>
+Installed-Size: 20
+Depends: prometheus
+Section: admin
+Priority: optional
+Homepage: https://example.com
+Description: A package to automate Prometheus and Alertmanager setup
+ This package automates the installation and configuration of Prometheus,
+ Alertmanager, and OpenVPN exporter for monitoring purposes unable to install from here.

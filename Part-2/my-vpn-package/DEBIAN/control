@@ -1,0 +1,6 @@
+Package: my-vpn
+Version: 1.0
+Architecture: all
+Maintainer: kubapol <kubapol@yandex.ru>
+Depends: openvpn, easy-rsa
+Description: VPN server configuration package for DevOps project
